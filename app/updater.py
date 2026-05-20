@@ -1,24 +1,12 @@
 import os
-import shutil
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import openpyxl
 import pandas as pd
 import yfinance as yf
 
-# Docker supplies EXCEL_PATH via env var.
-# On Streamlit Cloud there's no env var, so we copy the template from the repo
-# into /tmp/ (writable, persists for the session) and work from there.
-_ENV_PATH = os.environ.get("EXCEL_PATH")
-_TEMPLATE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ETF_DETAILS_daily_update_interface.xlsx")
-_TMP_PATH  = "/tmp/ETF_DETAILS_daily_update_interface.xlsx"
-
-if _ENV_PATH:
-    EXCEL_PATH = _ENV_PATH
-else:
-    EXCEL_PATH = _TMP_PATH
-    if not os.path.exists(_TMP_PATH) and os.path.exists(_TEMPLATE):
-        shutil.copy(_TEMPLATE, _TMP_PATH)
+# Docker supplies EXCEL_PATH via env var; Streamlit Cloud uses file uploader (no default path).
+EXCEL_PATH = os.environ.get("EXCEL_PATH", "")
 
 # These are money market funds — not exchange-traded, stable $1.00 NAV
 MONEY_MARKETS = {"FXFXX", "FDRXX", "NOSXX", "FGXXX"}
@@ -30,10 +18,9 @@ TICKER_MAP = {
 }
 
 
-def get_tickers(excel_path=None):
+def get_tickers(excel_path: str):
     """Return list of (ticker, name) from the Daily Update sheet."""
-    path = excel_path or EXCEL_PATH
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(excel_path, read_only=True, data_only=True)
     ws = wb["Daily Update"]
     tickers = []
     seen = set()
@@ -101,50 +88,57 @@ def fetch_one(symbol: str) -> tuple[str, dict]:
         return symbol, {"error": str(exc)}
 
 
-def write_to_sheet1(results: dict, excel_path=None):
-    """Write fetched data as direct values into Sheet1 columns G:N."""
-    path = excel_path or EXCEL_PATH
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Sheet1"]
+def write_to_excel(results: dict, excel_path: str):
+    """Write fetched results into Daily Update and flag Excel to recalculate on open."""
+    wb = openpyxl.load_workbook(excel_path)
+    ws = wb["Daily Update"]
 
-    ws["B2"] = datetime.now().date()
+    # Tell Excel to recalculate all formulas (including Sheet1 XLOOKUPs) when opened
+    if wb.calculation is None:
+        from openpyxl.workbook.properties import CalcProperties
+        wb.calculation = CalcProperties()
+    wb.calculation.fullCalcOnLoad = True
 
-    def fmt(v):
-        return round(v, 8) if v is not None else None
+    now = datetime.now()
+    ws["B2"] = now.date()
 
-    for row in ws.iter_rows(min_row=5):
-        ticker = row[1].value  # Col B
+    for row in ws.iter_rows(min_row=6):
+        ticker = row[0].value
         if not ticker or ticker not in results:
             continue
         data = results[ticker]
         if "error" in data:
             continue
-        row[6].value = data.get("price")       # G: Current Price
-        row[7].value = data.get("volume")      # H: Volume
-        row[8].value = fmt(data.get("1d"))     # I: 1 Day Change %
-        row[9].value = fmt(data.get("5d"))     # J: 5 Day Change %
-        row[10].value = fmt(data.get("1mo"))   # K: 1 Mos Change %
-        row[11].value = fmt(data.get("1yr"))   # L: 1 Year Change %
-        row[12].value = fmt(data.get("2yr"))   # M: 2 Year Change %
-        row[13].value = fmt(data.get("5yr"))   # N: 5 Year Change %
 
-    wb.save(path)
+        def fmt(v):
+            return round(v, 8) if v is not None else None
+
+        row[2].value = data.get("price")           # C: Current Price
+        row[3].value = data.get("volume")          # D: Volume
+        row[4].value = fmt(data.get("1d"))         # E: 1 Day Change %
+        row[5].value = fmt(data.get("5d"))         # F: 5 Day Change %
+        row[6].value = fmt(data.get("1mo"))        # G: 1 Mos Change %
+        row[7].value = fmt(data.get("1yr"))        # H: 1 Year Change %
+        row[8].value = fmt(data.get("2yr"))        # I: 2 Year Change %
+        row[9].value = fmt(data.get("5yr"))        # J: 5 Year Change %
+        row[10].value = now.strftime("%Y-%m-%d %H:%M")  # K: Last Updated
+        row[11].value = "fixed $1.00" if data.get("money_market") else "yfinance"  # L: Source
+
+    wb.save(excel_path)
     wb.close()
 
 
-def read_sheet1_grouped(excel_path=None, results: dict | None = None) -> dict:
+def read_sheet1_grouped(excel_path: str, results: dict | None = None) -> dict:
     """
     Read Sheet1 structure and return holdings grouped by account, then by ETF.
     If `results` (fetched market data keyed by ticker) is provided, price/change
     data comes from there instead of Sheet1 formula cells (which Python can't evaluate).
     Returns: { "IRA": [ {etf, name, price, d1, ..., holdings: [...]}, ... ], ... }
     """
-    path = excel_path or EXCEL_PATH
-    wb = openpyxl.load_workbook(path, data_only=True)
+    wb = openpyxl.load_workbook(excel_path, data_only=True)
     ws = wb["Sheet1"]
 
     def _mkt(ticker):
-        """Pull market data from results dict for a given ticker."""
         if not results or not ticker or ticker not in results:
             return {"price": None, "d1": None, "d5": None, "mo1": None,
                     "yr1": None, "yr2": None, "yr5": None}
@@ -200,44 +194,3 @@ def read_sheet1_grouped(excel_path=None, results: dict | None = None) -> dict:
         by_account.setdefault(g["acct"] or "Unknown", []).append(g)
 
     return by_account
-
-
-def write_to_excel(results: dict, excel_path=None):
-    """Write fetched results into Daily Update and flag Excel to recalculate on open."""
-    path = excel_path or EXCEL_PATH
-    wb = openpyxl.load_workbook(path)
-    ws = wb["Daily Update"]
-
-    # Tell Excel to recalculate all formulas (including Sheet1 XLOOKUPs) when opened
-    if wb.calculation is None:
-        from openpyxl.workbook.properties import CalcProperties
-        wb.calculation = CalcProperties()
-    wb.calculation.fullCalcOnLoad = True
-
-    now = datetime.now()
-    ws["B2"] = now.date()
-
-    for row in ws.iter_rows(min_row=6):
-        ticker = row[0].value
-        if not ticker or ticker not in results:
-            continue
-        data = results[ticker]
-        if "error" in data:
-            continue
-
-        def fmt(v):
-            return round(v, 8) if v is not None else None
-
-        row[2].value = data.get("price")           # C: Current Price
-        row[3].value = data.get("volume")          # D: Volume
-        row[4].value = fmt(data.get("1d"))         # E: 1 Day Change %
-        row[5].value = fmt(data.get("5d"))         # F: 5 Day Change %
-        row[6].value = fmt(data.get("1mo"))        # G: 1 Mos Change %
-        row[7].value = fmt(data.get("1yr"))        # H: 1 Year Change %
-        row[8].value = fmt(data.get("2yr"))        # I: 2 Year Change %
-        row[9].value = fmt(data.get("5yr"))        # J: 5 Year Change %
-        row[10].value = now.strftime("%Y-%m-%d %H:%M")  # K: Last Updated
-        row[11].value = "fixed $1.00" if data.get("money_market") else "yfinance"  # L: Source
-
-    wb.save(path)
-    wb.close()
