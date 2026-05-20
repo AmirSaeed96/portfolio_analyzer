@@ -88,6 +88,34 @@ def fetch_one(symbol: str) -> tuple[str, dict]:
         return symbol, {"error": str(exc)}
 
 
+def write_to_sheet1(results: dict, excel_path: str):
+    """Write fetched data as direct values into Sheet1 columns G:N, overwriting formulas."""
+    wb = openpyxl.load_workbook(excel_path)
+    ws = wb["Sheet1"]
+
+    def fmt(v):
+        return round(v, 8) if v is not None else None
+
+    for row in ws.iter_rows(min_row=5):
+        ticker = row[1].value  # Col B
+        if not ticker or ticker not in results:
+            continue
+        data = results[ticker]
+        if "error" in data:
+            continue
+        row[6].value  = data.get("price")       # G: Current Price
+        row[7].value  = data.get("volume")      # H: Volume
+        row[8].value  = fmt(data.get("1d"))     # I: 1 Day Change %
+        row[9].value  = fmt(data.get("5d"))     # J: 5 Day Change %
+        row[10].value = fmt(data.get("1mo"))    # K: 1 Mos Change %
+        row[11].value = fmt(data.get("1yr"))    # L: 1 Year Change %
+        row[12].value = fmt(data.get("2yr"))    # M: 2 Year Change %
+        row[13].value = fmt(data.get("5yr"))    # N: 5 Year Change %
+
+    wb.save(excel_path)
+    wb.close()
+
+
 def write_to_excel(results: dict, excel_path: str):
     """Write fetched results into Daily Update and flag Excel to recalculate on open."""
     wb = openpyxl.load_workbook(excel_path)

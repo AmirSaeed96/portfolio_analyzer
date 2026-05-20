@@ -10,7 +10,7 @@ import streamlit as st
 from updater import (
     EXCEL_PATH, MONEY_MARKETS,
     fetch_one, get_tickers,
-    write_to_excel, read_sheet1_grouped,
+    write_to_excel, write_to_sheet1, read_sheet1_grouped,
 )
 
 st.set_page_config(page_title="ETF Updater", page_icon="📈", layout="wide")
@@ -133,6 +133,7 @@ if refresh:
 
     try:
         write_to_excel(results, working_path)
+        write_to_sheet1(results, working_path)
     except PermissionError:
         bar.empty()
         st.error("❌ Cannot save — please close the Excel file first, then try again.")
