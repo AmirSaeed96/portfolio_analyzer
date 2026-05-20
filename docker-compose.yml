@@ -1,0 +1,10 @@
+services:
+  updater:
+    build: ./app
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/data
+    environment:
+      - EXCEL_PATH=/data/ETF_DETAILS_daily_update_interface.xlsx
+    restart: unless-stopped
